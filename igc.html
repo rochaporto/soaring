@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html> 
+  <meta http-equiv="content-type" content="text/html; charset=utf-8" /> 
+  <head> 
+    <title>OpenSoaring</title> 
+    <style type="text/css">
+        html { 
+            height: 100%; 
+            overflow: hidden; 
+        }
+        body {
+            height: 100%; 
+            margin: 0px; 
+            padding: 0px; 
+        }
+        #top {
+            padding: 0;
+            margin: 0;
+            position: absolute;
+            top: 0px;
+            left: 0px;
+            width: 100%;
+            height: 80px;
+            overflow: hidden;
+        }
+
+        #main {
+            padding: 0;
+            margin: 0;
+            position: absolute;
+            top: 80px;
+            left: 0px;
+            right: 0px;
+            bottom: 0px;
+            overflow: auto;
+        }
+
+        #mapCanvas { 
+            position: absolute;
+            width: 100%; 
+            height: 100%; 
+        }
+
+        #mapChart {
+            position:absolute;
+            left: 80px;
+            right: 80px;
+            bottom: 40px;
+            height: 130px;
+        }
+
+        #chart {
+            position:absolute;
+            left: 70px;
+            right: 70px;
+            bottom: 30px;
+            height: 150px;
+            background: #FFFFFF;
+            filter: alpha(opacity=40);
+            -moz-opacity: 0.4;
+            opacity: 0.4;
+        }
+    </style>
+    <script type="text/javascript" src="dygraph-combined.js"></script>
+    <script type="text/javascript" src="http://maps.google.com/maps/api/js?sensor=true"></script>
+    <script type="text/javascript" src="js/igc.js"></script>
+  </head> 
+  <body onload="init()"> 
+    <div id="top">
+    </div>
+    <div id="main">
+      <div id="mapCanvas"></div> 
+      <div id="chart"></div>
+      <div id="mapChart"></div>
+    </div>
+  </body> 
+</html>
