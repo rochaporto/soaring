@@ -54,9 +54,7 @@ class Flight(FlightBase):
       prs (pressure sensor description), cid (competition id), ccl (glider class)
     """
 
-    STOPPED = 0
-    STRAIGHT = 1
-    CIRCLING = 2
+    STOPPED, STRAIGHT, CIRCLING = range(3)
 
     def __init__(self):
         self.metadata = {
@@ -95,6 +93,7 @@ class Flight(FlightBase):
             self.computeL3(prevP, p)
             self.computeStats(p)
         self.points.append(p)
+        self.updateMode()
 
     def computeL1(self, p):
         p["latdg"] = self.dms2dd(p["lat"])
@@ -117,12 +116,7 @@ class Flight(FlightBase):
             p["computeL3"]["turnRate"] = (p["computeL2"]["bearing"] \
                 - prevP["computeL2"]["bearing"]) / p["computeL2"]["timeDelta"]
 
-    def computeL4(self, prevP, p):
-        self.computeMode(p)
-        
     def computeStats(self, p):
-        if p["computeL4"]["mode"] is Flight.STOPPED:
-            return
         self.stats["totalKms"] += p["computeL2"]["distance"]
         self.stats["maxAlt"] = max(self.stats["maxAlt"], p["pAlt"])
         self.stats["minAlt"] = p["pAlt"] if self.stats["minAlt"] is None \
@@ -131,46 +125,56 @@ class Flight(FlightBase):
         self.stats["minGSpeed"] = p["computeL3"]["gSpeed"] if self.stats["minGSpeed"] is None \
             else min(self.stats["minGSpeed"], p["computeL3"]["gSpeed"])
 
-    def computeMode(self, points):
+    def newPhase(self, pIndex, phaseType):
+        if len(self.phases) != 0:
+            self.phases[-1]["end"] = pIndex - 1
+        self.phases.append({"start": pIndex, "end": None, "type": phaseType})
+        # TODO: calculate phase stats?
+
+    def updateMode(self):
         # First point, just set as stopped and return
-        if len(self.points) == 0:
+        if len(self.points) == 1:
             self.points[0]["computeL4"]["mode"] = Flight.STOPPED
-            p["computeL4"]["mode"] = Flight.STOPPED
             return
-        i = len(self.points) - 1
+
+        p, pI = self.points[-1], len(self.points) - 1
+        p["computeL4"]["mode"] = self.points[-2]["computeL4"]["mode"]
         # Move from stopped to straight
-        if self.points[i]["computeL4"]["mode"] == Flight.STOPPED and p["computeL3"]["gSpeed"] > self.control["minSpeed"]:
+        if p["computeL4"]["mode"] == Flight.STOPPED \
+            and p["computeL3"]["gSpeed"] > self.control["minSpeed"]:
             p["computeL4"]["mode"] = Flight.STRAIGHT
+            self.newPhase(pI, Flight.STRAIGHT)
         # Move from straight to circling (>= minTurnRate kept for more than minCircleTime)
         elif p["computeL4"]["mode"] == Flight.STRAIGHT:
-            curTime, testP = p["time"], self.points[i]
-            while i > 0 and (curTime - testP["time"]).seconds < self.control["minCircleTime"]:
-                if fabs(testP["computeL3"]["turnRate"]) >= self.control["minCircleRate"]:
-                    --i
-                    testP = self.points[i]
+            curTime, j = p["time"], pI-1
+            while j > 0 and (p["time"] - self.points[j]["time"]).seconds < self.control["minCircleTime"]:
+                if fabs(self.points[j]["computeL3"]["turnRate"]) >= self.control["minCircleRate"]:
+                    j -= 1
                 else:
                     return
-            for j in range(i, len(self.points)-1):
-                self.points[j]["computeL4"]["mode"] = Flight.CIRCLING
-            p["computeL4"]["mode"] = Flight.CIRCLING
-            # close previous phase
+            for g in range(j, pI+1):
+                self.points[g]["computeL4"]["mode"] = Flight.CIRCLING
+            self.newPhase(pI, Flight.CIRCLING)
         # Move from circling to straight (< minTurnRate for more than minStraightTime)
         elif p["computeL4"]["mode"] == Flight.CIRCLING:
-            curTime, testP = p["time"], self.points[i]
-            while i > 0 and (curTime - testP["time"]).seconds < self.control["minStraightTime"]:
-                if fabs(testP["computeL3"]["turnRate"]) < self.control["minCircleRate"]:
-                    --i
-                    testP = self.points[i]
+            curTime, j = p["time"], pI-1
+            while j > 0 and (curTime - self.points[j]["time"]).seconds < self.control["minStraightTime"]:
+                if fabs(self.points[j]["computeL3"]["turnRate"]) < self.control["minCircleRate"]:
+                    j -= 1
                 else:
                     return
-            for j in range(i, len(self.points)-1):
-                self.points[j]["computeL4"]["mode"] = Flight.STRAIGHT
-            p["computeL4"]["mode"] = Flight.STRAIGHT
-            # close previous phase
+            for g in range(j, pI+1):
+                self.points[g]["computeL4"]["mode"] = Flight.STRAIGHT
+            self.newPhase(pI, Flight.STRAIGHT)
+
+    def pathInKml(self):
+        pathKml = ""
+        for point in self.points:
+            pathKml += "%.2f,%.2f,%d " % (point["latdg"], point["londg"], point["gAlt"])
+        return "<LineString><coordinates>%s</coordinates></LineString>" % pathKml
 
 class FlightFetcherType:
-    FILE = 1
-    URL = 2
+    FILE, URL = range(2)
 
 class FlightFetcher(FlightBase):
 
@@ -250,7 +254,7 @@ class FlightExporter(FlightBase):
         self.flight = flight
 
     def export(self):
-        print """
+        text = """
         Date: %s\tPilot: %s
         Registration: %s\tType: %s\t\tClass: %s
         Points: %d
@@ -258,7 +262,9 @@ class FlightExporter(FlightBase):
         self.flight.metadata["plt"], self.flight.metadata["gid"],
         self.flight.metadata["gty"], self.flight.metadata["ccl"], 
         len(self.flight.points))
-        print self.flight.stats
+        kml = self.flight.pathInKml()
+        print "%s :: %d" % (kml, len(kml))
+        return text
 
 class FlightCmdLine(object):
 
@@ -285,7 +291,7 @@ class FlightCmdLine(object):
     def run(self):
         flightFetcher = FlightFetcher(self.args[0])
         flightReader = FlightReader(flightFetcher)
-        FlightExporter(flightReader.flight).export()
+        print FlightExporter(flightReader.flight).export()
 
 if __name__ == "__main__":
     flightCmd = FlightCmdLine()
