@@ -2,7 +2,7 @@ import optparse
 import sys
 
 from datetime import datetime, timedelta
-from math import sin, cos, asin, acos, fabs, sqrt, radians, pi
+from math import sin, cos, asin, acos, atan2, fabs, sqrt, radians, degrees, pi
 from optparse import OptionParser
 
 verbose = False
@@ -18,9 +18,6 @@ class FlightBase(object):
         if self.verbose:
             print str
 
-    def dg2rd(self, dg):
-        return radians(dg)
-
     def dms2dd(self, value):
         cardinal = value[-1]
         dd = None
@@ -33,12 +30,20 @@ class FlightBase(object):
         return dd
 
     def distance(self, p1, p2):
-#        return 2 * asin( 
-#                sqrt( (sin( (p1["latrd"] - p2["latrd"]) / 2 ) ) ** 2 
-#                    + cos(p1["latrd"]) * cos(p2["latrd"]) * ( sin( (p1["lonrd"] - p2["lonrd"]) / 2 ) ) ** 2
-#                    )
-#                )
-        return acos ( sin(p1["latrd"]) * sin(p2["latrd"]) + cos(p1["latrd"]) * cos(p2["latrd"]) * cos(p1["lonrd"]-p2["lonrd"])) * self.earthRadius
+        return 2 * asin( 
+                sqrt( (sin( (p1["latrd"] - p2["latrd"]) / 2 ) ) ** 2 
+                    + cos(p1["latrd"]) * cos(p2["latrd"]) * ( sin( (p1["lonrd"] - p2["lonrd"]) / 2 ) ) ** 2
+                    )
+                ) * self.earthRadius
+
+    def bearing(self, p1, p2):
+        return degrees(
+                atan2( 
+                    sin(p1["lonrd"] - p2["lonrd"]) * cos(p2["latrd"]), 
+                    cos(p1["latrd"]) * sin(p2["latrd"]) 
+                    - sin(p1["latrd"]) * cos(p2["latrd"]) * cos(p1["lonrd"] - p2["lonrd"])
+                ) % (2 * pi)
+                )
 
 class Flight(FlightBase):
     """
@@ -49,6 +54,10 @@ class Flight(FlightBase):
       prs (pressure sensor description), cid (competition id), ccl (glider class)
     """
 
+    STOPPED = 0
+    STRAIGHT = 1
+    CIRCLING = 2
+
     def __init__(self):
         self.metadata = {
             "mfr": None, "mfrId": None, "mfrIdExt": None,
@@ -56,43 +65,112 @@ class Flight(FlightBase):
             "gid": None, "dtm": None, "rfw": None, "rhw": None, "fty": None,
             "gps": None, "prs": None, "cid": None, "ccl": None
         }
+        self.control = {
+            "minSpeed": 50.0, "minCircleRate": 4, "minCircleTime": 45, "minStraightTime": 15,
+        }
         self.points = []
+        self.phases = []
         self.stats = {
-            "totalKms": 0.0, "pressAlt+": 0, "pressAlt-": 0, "time+": 0, "time-": 0, 
-            "pressAlt+": 0, "pressAlt-": 0, "gnssAlt+": 0, "gnssAlt-": 0,
+            "totalKms": 0.0, "maxAlt": None, "minAlt": None, "maxGSpeed": None, "minGSpeed": None,
         }
 
-    def addPoint(self, p):
+    def putPoint(self, time, lat, lon, fix, pAlt, gAlt):
+        p = {
+            "time": time, "lat": lat, "lon": lon, "fix": fix, "pAlt": pAlt, "gAlt": gAlt,
+            "latdg": None, "londg": None, "latrd": None, "lonrd": None,
+            "computeL2": {
+                "distance": None, "bearing": None, "timeDelta": None, "pAltDelta": None, "gAltDelta": None,
+            },
+            "computeL3": {
+                "gSpeed": None, "pVario": None, "gVario": None, "turnRate": None,
+            },
+            "computeL4": {
+                "mode": Flight.STOPPED,
+            },
+            }
         prevP = self.points[-1] if len(self.points) != 0 else None
-        p["latdg"] = self.dms2dd(p["lat"])
-        p["londg"] = self.dms2dd(p["lon"])
-        p["latrd"] = self.dg2rd(p["latdg"])
-        p["lonrd"] = self.dg2rd(p["londg"])
-        # do basic analysis immediatelly
-        p["timeDiff"], p["pressAltDiff"], p["gnssAltDiff"], p["dist"], p["pressVario"], p["gnssVario"] = 0, 0, 0, 0, 0, 0
+        self.computeL1(p)
         if prevP is not None:
-            p["timeDiff"] = (p["time"] - prevP["time"]).seconds
-            p["pressAltDiff"] = fabs(p["pressAlt"] - prevP["pressAlt"])
-            p["gnssAltDiff"] = fabs(p["gnssAlt"] - prevP["gnssAlt"])
-            p["dist"] = self.distance(p, prevP)
-            p["pressVario"] =  float(p["pressAltDiff"]) / p["timeDiff"]
-            p["gnssVario"] = float(p["gnssAltDiff"]) / p["timeDiff"]
+            self.computeL2(prevP, p)
+            self.computeL3(prevP, p)
+            self.computeStats(p)
         self.points.append(p)
 
-        # do basic stats immediatelly
-        if p["pressVario"] > 0:
-            self.stats["time+"] += p["timeDiff"]
-            self.stats["pressAlt+"] += p["pressAltDiff"]
-            self.stats["gnssAlt+"] += p["gnssAltDiff"]
-        else:
-            self.stats["time-"] += p["timeDiff"]
-            self.stats["pressAlt-"] += p["pressAltDiff"]
-            self.stats["gnssAlt-"] += p["gnssAltDiff"]
-        self.stats["totalKms"] += p["dist"]
+    def computeL1(self, p):
+        p["latdg"] = self.dms2dd(p["lat"])
+        p["londg"] = self.dms2dd(p["lon"])
+        p["latrd"] = radians(p["latdg"])
+        p["lonrd"] = radians(p["londg"])
+
+    def computeL2(self, prevP, p):
+        p["computeL2"]["distance"] = self.distance(prevP, p)
+        p["computeL2"]["bearing"] = self.bearing(prevP, p)
+        p["computeL2"]["timeDelta"] = (p["time"] - prevP["time"]).seconds
+        p["computeL2"]["pAltDelta"] = p["pAlt"] - prevP["pAlt"]
+        p["computeL2"]["gAltDelta"] = p["gAlt"] - prevP["gAlt"]
+
+    def computeL3(self, prevP, p):
+        p["computeL3"]["gSpeed"] = (p["computeL2"]["distance"] * 3600) / p["computeL2"]["timeDelta"]
+        p["computeL3"]["pVario"] = float(p["computeL2"]["pAltDelta"]) / p["computeL2"]["timeDelta"]
+        p["computeL3"]["gVario"] = float(p["computeL2"]["gAltDelta"]) / p["computeL2"]["timeDelta"]
+        if prevP["computeL2"]["bearing"] is not None:
+            p["computeL3"]["turnRate"] = (p["computeL2"]["bearing"] \
+                - prevP["computeL2"]["bearing"]) / p["computeL2"]["timeDelta"]
+
+    def computeL4(self, prevP, p):
+        self.computeMode(p)
+        
+    def computeStats(self, p):
+        if p["computeL4"]["mode"] is Flight.STOPPED:
+            return
+        self.stats["totalKms"] += p["computeL2"]["distance"]
+        self.stats["maxAlt"] = max(self.stats["maxAlt"], p["pAlt"])
+        self.stats["minAlt"] = p["pAlt"] if self.stats["minAlt"] is None \
+            else min(self.stats["minAlt"], p["pAlt"])
+        self.stats["maxGSpeed"] = max(self.stats["maxGSpeed"], p["computeL3"]["gSpeed"])
+        self.stats["minGSpeed"] = p["computeL3"]["gSpeed"] if self.stats["minGSpeed"] is None \
+            else min(self.stats["minGSpeed"], p["computeL3"]["gSpeed"])
+
+    def computeMode(self, points):
+        # First point, just set as stopped and return
+        if len(self.points) == 0:
+            self.points[0]["computeL4"]["mode"] = Flight.STOPPED
+            p["computeL4"]["mode"] = Flight.STOPPED
+            return
+        i = len(self.points) - 1
+        # Move from stopped to straight
+        if self.points[i]["computeL4"]["mode"] == Flight.STOPPED and p["computeL3"]["gSpeed"] > self.control["minSpeed"]:
+            p["computeL4"]["mode"] = Flight.STRAIGHT
+        # Move from straight to circling (>= minTurnRate kept for more than minCircleTime)
+        elif p["computeL4"]["mode"] == Flight.STRAIGHT:
+            curTime, testP = p["time"], self.points[i]
+            while i > 0 and (curTime - testP["time"]).seconds < self.control["minCircleTime"]:
+                if fabs(testP["computeL3"]["turnRate"]) >= self.control["minCircleRate"]:
+                    --i
+                    testP = self.points[i]
+                else:
+                    return
+            for j in range(i, len(self.points)-1):
+                self.points[j]["computeL4"]["mode"] = Flight.CIRCLING
+            p["computeL4"]["mode"] = Flight.CIRCLING
+            # close previous phase
+        # Move from circling to straight (< minTurnRate for more than minStraightTime)
+        elif p["computeL4"]["mode"] == Flight.CIRCLING:
+            curTime, testP = p["time"], self.points[i]
+            while i > 0 and (curTime - testP["time"]).seconds < self.control["minStraightTime"]:
+                if fabs(testP["computeL3"]["turnRate"]) < self.control["minCircleRate"]:
+                    --i
+                    testP = self.points[i]
+                else:
+                    return
+            for j in range(i, len(self.points)-1):
+                self.points[j]["computeL4"]["mode"] = Flight.STRAIGHT
+            p["computeL4"]["mode"] = Flight.STRAIGHT
+            # close previous phase
 
 class FlightFetcherType:
-    FILE=1
-    URL=2
+    FILE = 1
+    URL = 2
 
 class FlightFetcher(FlightBase):
 
@@ -139,10 +217,8 @@ class FlightReader(FlightBase):
         self.flight.metadata["mfrIdExt"] = record[7:]
 
     def parseB(self, record):
-        p = {"time": datetime.strptime(record[1:7], "%H%M%S"),
-             "lat": record[7:15], "lon": record[15:24], 
-             "fix": record[24], "pressAlt": int(record[25:30]), "gnssAlt": int(record[30:35])}
-        self.flight.addPoint(p)
+        self.flight.putPoint(datetime.strptime(record[1:7], "%H%M%S"), record[7:15], record[15:24],
+                record[24], int(record[25:30]), int(record[30:35]))
 
     def parseC(self, record):
         None
