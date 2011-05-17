@@ -212,9 +212,10 @@ class FlightReader(FlightBase):
         """
             http://carrier.csi.cam.ac.uk/forsterlewis/soaring/igc_file_format/igc_format_2008.html
         """
-        lines = self.flight.rawFlight.split("\r\n")
+        lines = self.flight.rawFlight.split("\n")
         for line in lines:
-            getattr(self, "parse%s" % line[0])(line)
+            if line != "":
+                getattr(self, "parse%s" % line[0])(line.strip())
 
     def parseA(self, record):
         self.flight.metadata["mfr"] = record[1:4]
@@ -318,7 +319,7 @@ class FlightOptimizer(FlightBase):
                         print circuit
                         tp3 += 1
                     else:
-                        tp3 = self.forward(tp3, 0.5 * (circuit["distance"] - distance))
+                        tp3 = self.forward(tp3, 0.5 *(circuit["distance"] - distance))
         return circuit
     
 class FlightExporter(FlightBase):
@@ -366,7 +367,7 @@ class FlightCmdLine(object):
         flightReader = FlightReader(flightFetcher)
         print FlightExporter(flightReader.flight).export()
         flightOpt = FlightOptimizer(flightReader.flight)
-        flightOpt.optimize3()
+        circuit = flightOpt.optimize3()
 
 if __name__ == "__main__":
     flightCmd = FlightCmdLine()
