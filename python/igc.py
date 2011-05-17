@@ -9,7 +9,8 @@ verbose = False
 
 class FlightBase(object):
     
-    earthRadius = 6371
+    # FAI Earth Sphere Radius
+    earthRadius = 6371 
 
     def __init__(self, verbose=False):
         self.verbose = True
@@ -248,6 +249,78 @@ class FlightReader(FlightBase):
     def parseL(self, record):
         None
 
+class FlightOptimizer(FlightBase):
+
+    def __init__(self, flight):
+        self.flight = flight
+        self.maxCPDistance = 0 # Maximum distance between 2 consecutive points
+        self.prepare()
+
+    def prepare(self):
+        for i in range(0, len(self.flight.points)-1):
+            distance = self.distance(self.flight.points[i], self.flight.points[i+1])
+            if distance > self.maxCPDistance:
+                self.maxCPDistance = distance
+
+    def forward(self, i, distance):
+        step = int(distance / self.maxCPDistance)
+        if step > 0:
+            return i + step
+        return i+1
+
+    def optimize1(self):
+        circuit = {"sta": None, "tps": None, "end": None, "distance": 0.0}
+        flight, nPoints = self.flight, len(self.flight.points)
+        sta, tp1, end = 0, 1, nPoints-1
+        while tp1 < nPoints-1:
+            distance = self.distance(flight.points[sta], flight.points[tp1]) \
+                + self.distance(flight.points[tp1], flight.points[end])
+            if distance > circuit["distance"]:
+                circuit = {"sta": sta, "tps": [tp1], "end": end, "distance": distance}
+                tp1 += 1
+                print circuit
+            else:
+                tp1 = self.forward(tp1, 0.5 * (circuit["distance"] - distance))
+        return circuit
+
+    def optimize2(self):
+        circuit = {"sta": None, "tps": None, "end": None, "distance": 0.0}
+        flight, nPoints = self.flight, len(self.flight.points)
+        sta, tp1, tp2, end = 0, 1, -1, nPoints-1
+        for tp1 in range(1, nPoints-2):
+            leg1 = self.distance(flight.points[sta], flight.points[tp1])
+            tp2 = tp1+1
+            while tp2 < nPoints-1:
+                distance = leg1 + self.distance(flight.points[tp1], flight.points[tp2]) \
+                    + self.distance(flight.points[tp2], flight.points[end])
+                if distance > circuit["distance"]:
+                    circuit = {"sta": sta, "tps": [tp1, tp2], "end": end, "distance": distance}
+                    tp2 += 1
+                    print circuit
+                else:
+                    tp2 = self.forward(tp2, 0.5 * (circuit["distance"] - distance))
+        return circuit
+
+    def optimize3(self):
+        circuit = {"sta": None, "tps": None, "end": None, "distance": 0.0}
+        flight, nPoints = self.flight, len(self.flight.points)
+        sta, tp1, tp2, tp3, end = 0, -1, -1, -1, nPoints-1
+        for tp1 in range(1, nPoints-3):
+            leg1 = self.distance(flight.points[sta], flight.points[tp1])
+            for tp2 in range(tp1+1, nPoints-2):
+                leg2 = self.distance(flight.points[tp1], flight.points[tp2])
+                tp3 = tp2+1
+                while tp3 < nPoints-1:
+                    leg3 = self.distance(flight.points[tp2], flight.points[tp3])
+                    distance = leg1 + leg2 + leg3 + self.distance(flight.points[tp3], flight.points[end])
+                    if distance > circuit["distance"]:
+                        circuit = {"sta": sta, "tps": [tp1, tp2, tp3], "end": end, "distance": distance}
+                        print circuit
+                        tp3 += 1
+                    else:
+                        tp3 = self.forward(tp3, 0.5 * (circuit["distance"] - distance))
+        return circuit
+    
 class FlightExporter(FlightBase):
 
     def __init__(self, flight):
@@ -292,6 +365,8 @@ class FlightCmdLine(object):
         flightFetcher = FlightFetcher(self.args[0])
         flightReader = FlightReader(flightFetcher)
         print FlightExporter(flightReader.flight).export()
+        flightOpt = FlightOptimizer(flightReader.flight)
+        flightOpt.optimize3()
 
 if __name__ == "__main__":
     flightCmd = FlightCmdLine()
