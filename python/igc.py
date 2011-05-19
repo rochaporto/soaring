@@ -1,9 +1,11 @@
+import csv
 import optparse
 import sys
 
 from datetime import datetime, timedelta
 from math import sin, cos, asin, acos, atan2, fabs, sqrt, radians, degrees, pi
 from optparse import OptionParser
+from StringIO import StringIO
 
 verbose = False
 
@@ -72,6 +74,14 @@ class Flight(FlightBase):
         self.stats = {
             "totalKms": 0.0, "maxAlt": None, "minAlt": None, "maxGSpeed": None, "minGSpeed": None,
         }
+
+    def getAsList(self):
+        return [
+            self.metadata["dte"], self.metadata["plt"], self.metadata["gid"],
+            self.metadata["gty"], self.metadata["ccl"], self.metadata["cid"],
+            self.stats["totalKms"], self.stats["minAlt"], self.stats["maxAlt"],
+            self.stats["minGSpeed"], self.stats["maxGSpeed"], self.pathInKml(),
+        ]
 
     def putPoint(self, time, lat, lon, fix, pAlt, gAlt):
         p = {
@@ -254,20 +264,39 @@ class FlightOptimizer(FlightBase):
 
     def __init__(self, flight):
         self.flight = flight
+        print "preparing matrix"
+        self.distCache = [ [ 0 for i in range(0, len(flight.points)) ] for j in range(0, len(flight.points)) ] 
+        print "done preparing matrix"
         self.maxCPDistance = 0 # Maximum distance between 2 consecutive points
         self.prepare()
 
     def prepare(self):
-        for i in range(0, len(self.flight.points)-1):
-            distance = self.distance(self.flight.points[i], self.flight.points[i+1])
+        flight, nPoints = self.flight, len(self.flight.points)
+        print "calculating distances"
+        for i in range(1, nPoints-1):
+            distance = self.distance(flight.points[i], flight.points[i+1])
             if distance > self.maxCPDistance:
                 self.maxCPDistance = distance
+            for j in range(0, nPoints):
+                self.distCache[i][j] = self.distance(flight.points[i], flight.points[j])
 
     def forward(self, i, distance):
         step = int(distance / self.maxCPDistance)
         if step > 0:
             return i + step
         return i+1
+
+    def furthestFrom(self, i, begin, end):
+        j, furthestDistance, furthestIndex = begin, 0, -1
+        while j < len(self.flight.points):
+            distance = self.distCache[i][j]
+            if distance > furthestDistance:
+                furthestDistance = distance
+                furthestIndex = j
+                j += 1
+            else:
+                j = self.forward(j, furthestDistance - distance)
+        return furthestIndex
 
     def optimize1(self):
         circuit = {"sta": None, "tps": None, "end": None, "distance": 0.0}
@@ -307,13 +336,13 @@ class FlightOptimizer(FlightBase):
         flight, nPoints = self.flight, len(self.flight.points)
         sta, tp1, tp2, tp3, end = 0, -1, -1, -1, nPoints-1
         for tp1 in range(1, nPoints-3):
-            leg1 = self.distance(flight.points[sta], flight.points[tp1])
+            leg1 = self.distCache[sta][tp1]
             for tp2 in range(tp1+1, nPoints-2):
-                leg2 = self.distance(flight.points[tp1], flight.points[tp2])
+                leg2 = self.distCache[tp1][tp2]
                 tp3 = tp2+1
                 while tp3 < nPoints-1:
-                    leg3 = self.distance(flight.points[tp2], flight.points[tp3])
-                    distance = leg1 + leg2 + leg3 + self.distance(flight.points[tp3], flight.points[end])
+                    leg3 = self.distCache[tp2][tp3]
+                    distance = leg1 + leg2 + leg3 + self.distCache[tp3][end]
                     if distance > circuit["distance"]:
                         circuit = {"sta": sta, "tps": [tp1, tp2, tp3], "end": end, "distance": distance}
                         print circuit
@@ -324,21 +353,32 @@ class FlightOptimizer(FlightBase):
     
 class FlightExporter(FlightBase):
 
-    def __init__(self, flight):
-        self.flight = flight
+    def __init__(self):
+        self.flights = []
 
-    def export(self):
-        text = """
-        Date: %s\tPilot: %s
-        Registration: %s\tType: %s\t\tClass: %s
-        Points: %d
-        """ % (self.flight.metadata["dte"].strftime("%Y-%m-%d"), 
-        self.flight.metadata["plt"], self.flight.metadata["gid"],
-        self.flight.metadata["gty"], self.flight.metadata["ccl"], 
-        len(self.flight.points))
-        kml = self.flight.pathInKml()
-        print "%s :: %d" % (kml, len(kml))
+    def addFlight(self, flight):
+        self.flights.append(flight)
+
+    def exportAsText(self):
+        for flight in self.flights:
+            text = """
+            Date: %s\tPilot: %s
+            Registration: %s\tType: %s\t\tClass: %s
+            Points: %d
+            """ % (flight.metadata["dte"].strftime("%Y-%m-%d"), 
+            flight.metadata["plt"], flight.metadata["gid"],
+            flight.metadata["gty"], flight.metadata["ccl"], 
+            len(flight.points))
+            kml = flight.pathInKml()
+            print "%s :: %d" % (kml, len(kml))
         return text
+
+    def exportAsCSV(self):
+        csvStr = StringIO()
+        writer = csv.writer(csvStr)
+        for flight in self.flights:
+            writer.writerow(flight.getAsList())
+        return csvStr.getvalue()
 
 class FlightCmdLine(object):
 
@@ -365,7 +405,9 @@ class FlightCmdLine(object):
     def run(self):
         flightFetcher = FlightFetcher(self.args[0])
         flightReader = FlightReader(flightFetcher)
-        print FlightExporter(flightReader.flight).export()
+        flightExporter = FlightExporter()
+        flightExporter.addFlight(flightReader.flight)
+        print flightExporter.exportAsCSV()
         flightOpt = FlightOptimizer(flightReader.flight)
         circuit = flightOpt.optimize3()
 
