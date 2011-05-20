@@ -1,0 +1,9 @@
+queue:
+- name: default
+  rate: 5/s
+- name: flightprocess
+  rate: 1/s
+  retry_parameters:
+    task_age_limit: 1d
+  max_concurrent_requests: 5
+  mode: push

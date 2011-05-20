@@ -1,0 +1,4 @@
+cron:
+- description: flight crawler job
+  url: /crawler/netcoupe
+  schedule: every 1 minutes

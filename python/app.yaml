@@ -1,0 +1,8 @@
+application: soaring
+version: 0-1
+runtime: python
+api_version: 1
+
+handlers:
+- url: /crawler/.*
+  script: crawler.py
